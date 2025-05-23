@@ -3,98 +3,101 @@ import numpy as np
 import librosa
 import soundfile as sf
 from pydub import AudioSegment
-import os
 import io
+import os
 
-# Streamlit page config
-st.set_page_config(page_title="Voice Changer", page_icon="🎤")
+# Configure Streamlit
+st.set_page_config(page_title="🎤 Voice Changer", layout="wide")
+st.title("🎤 Real-Time Voice Changer")
 
-# Custom speed change function
-def speed_change(sound, speed=1.0):
-    return sound._spawn(sound.raw_data, overrides={
-        "frame_rate": int(sound.frame_rate * speed)
-    }).set_frame_rate(sound.frame_rate)
+# Check for FFmpeg (for pydub)
+def check_ffmpeg():
+    try:
+        AudioSegment.from_mp3("test.mp3").export("test_out.mp3", format="mp3")
+        os.remove("test_out.mp3")
+    except:
+        st.warning("FFmpeg not found! Audio processing may not work properly.")
+        st.info("On Streamlit Cloud, add 'ffmpeg' under 'Advanced settings' when deploying")
 
-def process_audio(uploaded_file, pitch_shift, speed_factor, echo, deep_effect):
-    # Create temp files in memory
-    with io.BytesIO() as temp_input:
-        # Save uploaded file to memory
-        temp_input.write(uploaded_file.read())
-        temp_input.seek(0)
-        
-        try:
-            # Process audio
-            sound = AudioSegment.from_file(temp_input, format=uploaded_file.type.split('/')[-1])
-            temp_wav = "temp_input.wav"
-            sound.export(temp_wav, format="wav")
-            
-            y, sr = librosa.load(temp_wav, sr=None)
-            y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=pitch_shift)
-            y_slow = librosa.effects.time_stretch(y_shifted, rate=speed_factor)
-            
-            if echo:
-                echo_length = int(0.15 * sr)
-                echo_signal = np.zeros_like(y_slow)
-                echo_signal[echo_length:] = y_slow[:-echo_length] * 0.3
-                y_slow = y_slow + echo_signal
-            
-            if deep_effect:
-                original_length = len(y_slow)
-                y_slow = librosa.resample(y_slow, orig_sr=sr, target_sr=int(sr * 0.9))
-                y_slow = librosa.util.fix_length(y_slow, size=original_length)
-            
-            with io.BytesIO() as temp_output:
-                sf.write(temp_output, y_slow, sr, format='wav')
-                temp_output.seek(0)
-                processed_audio = AudioSegment.from_wav(temp_output)
-                
-                if deep_effect:
-                    processed_audio = processed_audio + 5
-                    processed_audio = processed_audio.low_pass_filter(500)
-                
-                output_buffer = io.BytesIO()
-                processed_audio.export(output_buffer, format="mp3", bitrate="192k")
-                output_buffer.seek(0)
-                
-                return output_buffer
-                
-        finally:
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
+check_ffmpeg()
+
+# Audio processing function
+def process_audio(input_bytes, file_type, pitch=-3, speed=0.9, echo=False, deep=False):
+    # Convert to AudioSegment
+    audio = AudioSegment.from_file(io.BytesIO(input_bytes), format=file_type.split('/')[-1])
+    
+    # Convert to WAV in memory
+    wav_buffer = io.BytesIO()
+    audio.export(wav_buffer, format="wav")
+    wav_buffer.seek(0)
+    
+    # Process with Librosa
+    y, sr = librosa.load(wav_buffer, sr=None)
+    y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=pitch)
+    y_slow = librosa.effects.time_stretch(y_shifted, rate=speed)
+    
+    if echo:
+        echo_signal = np.zeros_like(y_slow)
+        echo_signal[int(0.15*sr):] = y_slow[:-int(0.15*sr)] * 0.3
+        y_slow += echo_signal
+    
+    if deep:
+        y_slow = librosa.resample(y_slow, orig_sr=sr, target_sr=int(sr*0.9))
+        y_slow = librosa.util.fix_length(y_slow, len(y_slow))
+    
+    # Convert back to AudioSegment
+    output_buffer = io.BytesIO()
+    sf.write(output_buffer, y_slow, sr, format='WAV')
+    output_buffer.seek(0)
+    processed = AudioSegment.from_wav(output_buffer)
+    
+    if deep:
+        processed = processed + 5  # Volume boost
+        processed = processed.low_pass_filter(500)  # Bass boost
+    
+    return processed
 
 # Streamlit UI
-st.title("🎤 Voice Changer App")
-st.write("Upload an audio file and modify it to sound like a different person!")
+with st.sidebar:
+    st.header("Settings")
+    pitch = st.slider("Pitch Shift", -12, 12, -3)
+    speed = st.slider("Speed", 0.5, 2.0, 0.9)
+    echo = st.checkbox("Add Echo", True)
+    deep = st.checkbox("Deep Voice Effect", True)
 
-uploaded_file = st.file_uploader("Choose an audio file", type=["mp3", "wav", "ogg"])
+uploaded_file = st.file_uploader("Upload audio (MP3/WAV)", type=["mp3", "wav"])
 
 if uploaded_file:
     col1, col2 = st.columns(2)
     
     with col1:
-        pitch_shift = st.slider("Pitch Shift (semitones)", -12, 12, -3)
-        speed_factor = st.slider("Speed Factor", 0.5, 2.0, 0.9)
-    
-    with col2:
-        echo = st.checkbox("Add Echo", True)
-        deep_effect = st.checkbox("Deep Voice Effect", True)
+        st.audio(uploaded_file, format=uploaded_file.type)
     
     if st.button("Process Audio"):
-        with st.spinner("Processing your audio..."):
+        with st.spinner("Transforming voice..."):
             try:
-                output_buffer = process_audio(
-                    uploaded_file, pitch_shift, speed_factor, echo, deep_effect
+                processed = process_audio(
+                    uploaded_file.read(),
+                    uploaded_file.type,
+                    pitch,
+                    speed,
+                    echo,
+                    deep
                 )
                 
-                st.audio(output_buffer, format="audio/mp3")
+                output = io.BytesIO()
+                processed.export(output, format="mp3", bitrate="192k")
+                output.seek(0)
                 
-                st.download_button(
-                    label="Download Processed Audio",
-                    data=output_buffer,
-                    file_name="modified_voice.mp3",
-                    mime="audio/mp3"
-                )
-                
+                with col2:
+                    st.audio(output, format="audio/mp3")
+                    st.download_button(
+                        "Download Result",
+                        data=output,
+                        file_name="modified_voice.mp3",
+                        mime="audio/mp3"
+                    )
+            
             except Exception as e:
-                st.error(f"Error processing audio: {str(e)}")
-                st.info("Make sure you've uploaded a valid audio file and try again.")
+                st.error(f"Error: {str(e)}")
+                st.info("Try a different file or adjust settings")
