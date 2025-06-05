@@ -95,8 +95,10 @@ elif st.button("🔊 Generate and Play Audio"):
             st.error(f"❌ Failed to generate audio: {error_msg}")
 
 # ------------- Developer Attribution ------------ #
+"""
 st.markdown("""
 <div class="footer">
   Developed by <a href="https://github.com/anwaralsulami" target="_blank">Anwar Alsulami</a>
 </div>
 """, unsafe_allow_html=True)
+"""
