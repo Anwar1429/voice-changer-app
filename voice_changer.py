@@ -1,103 +1,102 @@
 import streamlit as st
-import numpy as np
-import librosa
-import soundfile as sf
-from pydub import AudioSegment
-import io
+import asyncio
+import edge_tts
 import os
 
-# Configure Streamlit
-st.set_page_config(page_title="🎤 Voice Changer", layout="wide")
-st.title("🎤 Real-Time Voice Changer")
+# ----------------- Config ----------------- #
+st.set_page_config(
+    page_title="Vocalize AI",
+    page_icon="🎙️",
+    layout="centered"
+)
 
-# Check for FFmpeg (for pydub)
-def check_ffmpeg():
+# ------------- Custom Style ---------------- #
+st.markdown("""
+    <style>
+    .stTextArea textarea {
+        font-size: 16px;
+        line-height: 1.6;
+    }
+    .stButton>button {
+        background-color: #4CAF50;
+        color: white;
+        font-weight: bold;
+        border-radius: 5px;
+        padding: 0.5em 1em;
+    }
+    footer {
+        visibility: hidden;
+    }
+    .footer {
+        text-align: center;
+        font-size: 0.9em;
+        margin-top: 3em;
+        color: #888;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ----------- Constants ---------------- #
+max_chars = 2000
+voice_map = {
+    "English": {
+        "Male": "en-GB-RyanNeural",
+        "Female": "en-GB-SoniaNeural"
+    },
+    "Arabic": {
+        "Male": "ar-SA-HamedNeural",
+        "Female": "ar-SA-ZariyahNeural"
+    }
+}
+
+# ----------- Async TTS Function -------- #
+async def generate_tts(text, voice, file_path):
     try:
-        AudioSegment.from_mp3("test.mp3").export("test_out.mp3", format="mp3")
-        os.remove("test_out.mp3")
-    except:
-        st.warning("FFmpeg not found! Audio processing may not work properly.")
-        st.info("On Streamlit Cloud, add 'ffmpeg' under 'Advanced settings' when deploying")
+        tts = edge_tts.Communicate(text, voice=voice)
+        await tts.save(file_path)
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
-check_ffmpeg()
+# -------------- App Title ----------------- #
+st.title("🎙️ Vocalize AI")
+st.markdown("##### Convert text to realistic speech in English or Arabic using AI voices.")
+st.markdown("Easily listen to your message and download it as MP3. Great for education, communication, accessibility, or content creation!")
 
-# Audio processing function
-def process_audio(input_bytes, file_type, pitch=-3, speed=0.9, echo=False, deep=False):
-    # Convert to AudioSegment
-    audio = AudioSegment.from_file(io.BytesIO(input_bytes), format=file_type.split('/')[-1])
-    
-    # Convert to WAV in memory
-    wav_buffer = io.BytesIO()
-    audio.export(wav_buffer, format="wav")
-    wav_buffer.seek(0)
-    
-    # Process with Librosa
-    y, sr = librosa.load(wav_buffer, sr=None)
-    y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=pitch)
-    y_slow = librosa.effects.time_stretch(y_shifted, rate=speed)
-    
-    if echo:
-        echo_signal = np.zeros_like(y_slow)
-        echo_signal[int(0.15*sr):] = y_slow[:-int(0.15*sr)] * 0.3
-        y_slow += echo_signal
-    
-    if deep:
-        y_slow = librosa.resample(y_slow, orig_sr=sr, target_sr=int(sr*0.9))
-        y_slow = librosa.util.fix_length(y_slow, len(y_slow))
-    
-    # Convert back to AudioSegment
-    output_buffer = io.BytesIO()
-    sf.write(output_buffer, y_slow, sr, format='WAV')
-    output_buffer.seek(0)
-    processed = AudioSegment.from_wav(output_buffer)
-    
-    if deep:
-        processed = processed + 5  # Volume boost
-        processed = processed.low_pass_filter(500)  # Bass boost
-    
-    return processed
+# ----------- Input Section --------------- #
+col1, col2 = st.columns(2)
+with col1:
+    language = st.selectbox("🌍 Language", ["English", "Arabic"])
+with col2:
+    gender = st.radio("👤 Voice", ["Male", "Female"], horizontal=True)
 
-# Streamlit UI
-with st.sidebar:
-    st.header("Settings")
-    pitch = st.slider("Pitch Shift", -12, 12, -3)
-    speed = st.slider("Speed", 0.5, 2.0, 0.9)
-    echo = st.checkbox("Add Echo", True)
-    deep = st.checkbox("Deep Voice Effect", True)
+user_text = st.text_area("📝 Enter your text below:", height=150, max_chars=max_chars)
+chars_used = len(user_text)
+st.write(f"**Characters used:** `{chars_used}/{max_chars}`")
 
-uploaded_file = st.file_uploader("Upload audio (MP3/WAV)", type=["mp3", "wav"])
+# ----------- Button + Output -------------- #
+if chars_used > max_chars:
+    st.error(f"Please limit your input to {max_chars} characters.")
+elif st.button("🔊 Generate and Play Audio"):
+    if user_text.strip() == "":
+        st.warning("Please enter some text to convert.")
+    else:
+        selected_voice = voice_map[language][gender]
+        output_file = "user_tts_demo.mp3"
+        success, error_msg = asyncio.run(generate_tts(user_text, selected_voice, output_file))
 
-if uploaded_file:
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.audio(uploaded_file, format=uploaded_file.type)
-    
-    if st.button("Process Audio"):
-        with st.spinner("Transforming voice..."):
-            try:
-                processed = process_audio(
-                    uploaded_file.read(),
-                    uploaded_file.type,
-                    pitch,
-                    speed,
-                    echo,
-                    deep
-                )
-                
-                output = io.BytesIO()
-                processed.export(output, format="mp3", bitrate="192k")
-                output.seek(0)
-                
-                with col2:
-                    st.audio(output, format="audio/mp3")
-                    st.download_button(
-                        "Download Result",
-                        data=output,
-                        file_name="modified_voice.mp3",
-                        mime="audio/mp3"
-                    )
-            
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-                st.info("Try a different file or adjust settings")
+        if success:
+            st.success("✅ Audio generated successfully!")
+            with open(output_file, "rb") as f:
+                audio_bytes = f.read()
+                st.audio(audio_bytes, format="audio/mp3")
+            st.download_button("⬇️ Download MP3", audio_bytes, file_name="tts_audio.mp3", mime="audio/mp3")
+        else:
+            st.error(f"❌ Failed to generate audio: {error_msg}")
+
+# ------------- Developer Attribution ------------ #
+st.markdown("""
+<div class="footer">
+  Developed by <a href="https://github.com/anwaralsulami" target="_blank">Anwar Alsulami</a>
+</div>
+""", unsafe_allow_html=True)
