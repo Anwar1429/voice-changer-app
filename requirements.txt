@@ -1,5 +1,6 @@
 streamlit==1.17.0
 pydub==0.25.1
-librosa==0.10.1
-soundfile>=0.12.1
-numpy>=1.26
+librosa==0.8.1
+soundfile>=0.10.3
+numpy==1.22.4
+altair==4.2.2
